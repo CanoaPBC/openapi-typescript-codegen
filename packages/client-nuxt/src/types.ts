@@ -1,10 +1,11 @@
 import type {
-  AxiosError,
-  AxiosInstance,
-  AxiosResponse,
-  AxiosStatic,
-  CreateAxiosDefaults,
-} from 'axios';
+  AsyncDataOptions,
+  useAsyncData,
+  useFetch,
+  UseFetchOptions,
+  useLazyAsyncData,
+  useLazyFetch,
+} from 'nuxt/app';
 
 import type {
   BodySerializer,
@@ -14,8 +15,11 @@ import type {
 
 type OmitKeys<T, K> = Pick<T, Exclude<keyof T, K>>;
 
-export interface Config<ThrowOnError extends boolean = boolean>
-  extends Omit<CreateAxiosDefaults, 'auth' | 'headers'> {
+export interface Config
+  extends Omit<
+    FetchOptions<unknown>,
+    'baseURL' | 'body' | 'headers' | 'method'
+  > {
   /**
    * **This feature works only with the [experimental parser](https://heyapi.dev/openapi-ts/configuration#parser)**
    *
@@ -24,12 +28,11 @@ export interface Config<ThrowOnError extends boolean = boolean>
    */
   auth?: ((auth: Auth) => Promise<AuthToken> | AuthToken) | AuthToken;
   /**
-   * Axios implementation. You can use this option to provide a custom
-   * Axios instance.
+   * Base URL for all requests made by this client.
    *
-   * @default axios
+   * @default ''
    */
-  axios?: AxiosStatic;
+  baseURL?: string;
   /**
    * A function for serializing request body parameter. By default,
    * {@link JSON.stringify()} will be used.
@@ -42,7 +45,7 @@ export interface Config<ThrowOnError extends boolean = boolean>
    * {@link https://developer.mozilla.org/docs/Web/API/Headers/Headers#init See more}
    */
   headers?:
-    | CreateAxiosDefaults['headers']
+    | RequestInit['headers']
     | Record<
         string,
         | string
@@ -59,22 +62,19 @@ export interface Config<ThrowOnError extends boolean = boolean>
    * {@link https://developer.mozilla.org/docs/Web/API/fetch#method See more}
    */
   method?:
-    | 'connect'
-    | 'delete'
-    | 'get'
-    | 'head'
-    | 'options'
-    | 'patch'
-    | 'post'
-    | 'put'
-    | 'trace';
+    | 'CONNECT'
+    | 'DELETE'
+    | 'GET'
+    | 'HEAD'
+    | 'OPTIONS'
+    | 'PATCH'
+    | 'POST'
+    | 'PUT'
+    | 'TRACE';
   /**
    * A function for serializing request query parameters. By default, arrays
    * will be exploded in form style, objects will be exploded in deepObject
    * style, and reserved characters are percent-encoded.
-   *
-   * This method will have no effect if the native `paramsSerializer()` Axios
-   * API function is used.
    *
    * {@link https://swagger.io/docs/specification/serialization/#query View examples}
    */
@@ -92,12 +92,6 @@ export interface Config<ThrowOnError extends boolean = boolean>
    * the transformers and returned to the user.
    */
   responseValidator?: (data: unknown) => Promise<unknown>;
-  /**
-   * Throw an error instead of returning it in the response?
-   *
-   * @default false
-   */
-  throwOnError?: ThrowOnError;
 }
 
 export interface Auth {
@@ -110,23 +104,26 @@ export interface Auth {
 type AuthToken = string | undefined;
 
 export interface RequestOptions<
-  ThrowOnError extends boolean = boolean,
+  TComposable extends Composable = Composable,
   Url extends string = string,
-> extends Config<ThrowOnError> {
+> extends Config {
+  asyncDataOptions?: AsyncDataOptions<unknown>;
   /**
    * Any body that you want to add to your request.
    *
    * {@link https://developer.mozilla.org/docs/Web/API/fetch#body}
    */
-  body?: unknown;
+  body?: BodyInit | Record<string, any> | null;
   /**
    * You can provide a client instance returned by `createClient()` instead of
    * individual options. This might be also useful if you want to implement a
    * custom client.
    */
   client?: Client;
+  composable: TComposable;
+  key?: string;
   path?: Record<string, unknown>;
-  query?: Record<string, unknown>;
+  query?: FetchOptions<unknown>['query'];
   /**
    * Security mechanism(s) to use for the request.
    */
@@ -135,32 +132,37 @@ export interface RequestOptions<
 }
 
 export type RequestResult<
-  TData = unknown,
-  TError = unknown,
-  ThrowOnError extends boolean = boolean,
-> = ThrowOnError extends true
-  ? Promise<AxiosResponse<TData>>
-  : Promise<
-      | (AxiosResponse<TData> & { error: undefined })
-      | (AxiosError<TError> & { data: undefined; error: TError })
-    >;
+  TComposable extends Composable,
+  TData,
+  TError,
+> = TComposable extends '$fetch'
+  ? ReturnType<typeof $fetch<TData>>
+  : TComposable extends 'useAsyncData'
+    ? ReturnType<typeof useAsyncData<TData | null, TError>>
+    : TComposable extends 'useFetch'
+      ? ReturnType<typeof useFetch<TData | null, TError>>
+      : TComposable extends 'useLazyAsyncData'
+        ? ReturnType<typeof useLazyAsyncData<TData | null, TError>>
+        : TComposable extends 'useLazyFetch'
+          ? ReturnType<typeof useLazyFetch<TData | null, TError>>
+          : never;
 
 type MethodFn = <
+  TComposable extends Composable,
   TData = unknown,
   TError = unknown,
-  ThrowOnError extends boolean = false,
 >(
-  options: Omit<RequestOptions<ThrowOnError>, 'method'>,
-) => RequestResult<TData, TError, ThrowOnError>;
+  options: Omit<RequestOptions<TComposable>, 'method'>,
+) => RequestResult<TComposable, TData, TError>;
 
 type RequestFn = <
+  TComposable extends Composable,
   TData = unknown,
   TError = unknown,
-  ThrowOnError extends boolean = false,
 >(
-  options: Omit<RequestOptions<ThrowOnError>, 'method'> &
-    Pick<Required<RequestOptions<ThrowOnError>>, 'method'>,
-) => RequestResult<TData, TError, ThrowOnError>;
+  options: Omit<RequestOptions<TComposable>, 'method'> &
+    Pick<Required<RequestOptions<TComposable>>, 'method'>,
+) => RequestResult<TComposable, TData, TError>;
 
 export interface Client {
   /**
@@ -170,23 +172,25 @@ export interface Client {
     TData extends {
       body?: unknown;
       path?: Record<string, unknown>;
-      query?: Record<string, unknown>;
+      query?: FetchOptions<unknown>['query'];
       url: string;
     },
   >(
-    options: Pick<TData, 'url'> & Omit<Options<TData>, 'axios'>,
+    options: Pick<TData, 'path' | 'query' | 'url'> &
+      Pick<Options<'$fetch', TData>, 'baseURL' | 'querySerializer'>,
   ) => string;
+  connect: MethodFn;
   delete: MethodFn;
   get: MethodFn;
   getConfig: () => Config;
   head: MethodFn;
-  instance: AxiosInstance;
   options: MethodFn;
   patch: MethodFn;
   post: MethodFn;
   put: MethodFn;
   request: RequestFn;
   setConfig: (config: Config) => Config;
+  trace: MethodFn;
 }
 
 interface DataShape {
@@ -198,22 +202,31 @@ interface DataShape {
 }
 
 export type Options<
+  TComposable extends Composable,
   TData extends DataShape = DataShape,
-  ThrowOnError extends boolean = boolean,
-> = OmitKeys<RequestOptions<ThrowOnError>, 'body' | 'path' | 'query' | 'url'> &
+> = OmitKeys<RequestOptions<TComposable>, 'body' | 'path' | 'query' | 'url'> &
   Omit<TData, 'url'>;
 
-export type OptionsLegacyParser<
-  TData = unknown,
-  ThrowOnError extends boolean = boolean,
-> = TData extends { body?: any }
+export type OptionsLegacyParser<TData = unknown> = TData extends { body?: any }
   ? TData extends { headers?: any }
-    ? OmitKeys<RequestOptions<ThrowOnError>, 'body' | 'headers' | 'url'> & TData
-    : OmitKeys<RequestOptions<ThrowOnError>, 'body' | 'url'> &
+    ? OmitKeys<RequestOptions, 'body' | 'headers' | 'url'> & TData
+    : OmitKeys<RequestOptions, 'body' | 'url'> &
         TData &
-        Pick<RequestOptions<ThrowOnError>, 'headers'>
+        Pick<RequestOptions, 'headers'>
   : TData extends { headers?: any }
-    ? OmitKeys<RequestOptions<ThrowOnError>, 'headers' | 'url'> &
+    ? OmitKeys<RequestOptions, 'headers' | 'url'> &
         TData &
-        Pick<RequestOptions<ThrowOnError>, 'body'>
-    : OmitKeys<RequestOptions<ThrowOnError>, 'url'> & TData;
+        Pick<RequestOptions, 'body'>
+    : OmitKeys<RequestOptions, 'url'> & TData;
+
+type FetchOptions<TData> = Omit<
+  UseFetchOptions<TData, TData>,
+  keyof AsyncDataOptions<TData>
+>;
+
+export type Composable =
+  | '$fetch'
+  | 'useAsyncData'
+  | 'useFetch'
+  | 'useLazyAsyncData'
+  | 'useLazyFetch';
